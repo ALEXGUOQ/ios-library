@@ -144,44 +144,65 @@
       } retryWhere:^(UAHTTPRequest *request){
           return NO;
       } onSuccess:^(UAHTTPRequest *request, NSUInteger lastDelay){
-          UAInboxDBManager *inboxDBManager = [UAInboxDBManager shared];
-          NSString *responseString = request.responseString;
+        UAInboxDBManager *inboxDBManager = [UAInboxDBManager shared];
+        NSInteger __block unread;
+        NSArray * __block fetchedMessageObjectIDs = nil;
+        NSString *responseString = [request.responseString copy];
+        
+        [inboxDBManager performBackgroundActionAndSave:^(NSManagedObjectContext *context) {
           NSDictionary *jsonResponse = [NSJSONSerialization objectWithString:responseString];
           UA_LTRACE(@"Retrieved message list response: %@", responseString);
-
+          
           NSMutableSet *responseMessageIDs = [NSMutableSet set];
-
-          // Convert dictionary to objects for convenience          
+          
+          // Convert dictionary to objects for convenience
           for (NSDictionary *message in [jsonResponse objectForKey:@"messages"]) {
-              if (![inboxDBManager updateMessageWithDictionary:message]) {
-                  UAInboxMessage *tmp = [inboxDBManager addMessageFromDictionary:message];
-                  tmp.inbox = [UAInbox shared].messageList;
-              }
-
-              NSString *messageID = [message valueForKey:@"message_id"];
-              if (messageID) {
-                  [responseMessageIDs addObject:messageID];
-              }
+            if (![inboxDBManager updateMessageWithDictionary:message
+                                                     context:context]) {
+              UAInboxMessage *tmp = [inboxDBManager addMessageFromDictionary:message
+                                                                     context:context];
+              tmp.inbox = [UAInbox shared].messageList;
+            }
+            
+            NSString *messageID = [message valueForKey:@"message_id"];
+            if (messageID) {
+              [responseMessageIDs addObject:messageID];
+            }
           }
-
-          NSInteger unread = [[jsonResponse objectForKey: @"badge"] integerValue];
+          
+          unread = [[jsonResponse objectForKey: @"badge"] integerValue];
           if (unread < 0) {
-              unread = 0;
+            unread = 0;
           }
-
+          
           // Delete server side deleted messages
-          NSMutableSet *messagesToDelete = [[inboxDBManager messageIDs] mutableCopy];
+          NSMutableSet *messagesToDelete = [[inboxDBManager messageIDsInContext:context] mutableCopy];
           [messagesToDelete minusSet:responseMessageIDs];
-          [inboxDBManager deleteMessagesWithIDs:messagesToDelete];
-
+          [inboxDBManager deleteMessagesWithIDs:messagesToDelete context:context];
+          
           // Delete any expired messages
-          [[UAInboxDBManager shared] deleteExpiredMessages];
-
-          if (successBlock) {
-             successBlock([[inboxDBManager getMessages] mutableCopy], (NSUInteger) unread);
-          } else {
-              UA_LERR(@"missing successBlock");
+          [inboxDBManager deleteExpiredMessagesInContext:context];
+          NSArray *messages = [inboxDBManager getMessagesInContext:context];
+          NSError *permantentIdError = nil;
+          if (![context obtainPermanentIDsForObjects:messages
+                                               error:&permantentIdError]) {
+            UA_LERR(@"Error obtaining permanent IDs: %@", permantentIdError);
           }
+          fetchedMessageObjectIDs = [[messages valueForKey:@"objectID"] copy];
+        } completion:^(NSError *saveError) {
+          NSMutableArray *fetchedMessages = [NSMutableArray array];
+          for (NSManagedObjectID *objectID in fetchedMessageObjectIDs) {
+            UAInboxMessage *message = (UAInboxMessage *)[[inboxDBManager managedObjectContext] objectWithID:objectID];
+            if (message) {
+              [fetchedMessages addObject:message];
+            }
+          }
+          if (successBlock) {
+            successBlock(fetchedMessages, unread);
+          } else {
+            UA_LERR(@"missing successBlock");
+          }
+        }];
       } onFailure:^(UAHTTPRequest *request, NSUInteger lastDelay){
           if (failureBlock) {
               failureBlock(request);

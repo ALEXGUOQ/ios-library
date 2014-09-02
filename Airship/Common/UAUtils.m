@@ -198,14 +198,18 @@
 }
 
 + (NSDateFormatter *)ISODateFormatterUTC {
-    NSDateFormatter* dateFormatter = [[NSDateFormatter alloc] init];
+  static NSDateFormatter* __dateFormatter;
+  
+  if (__dateFormatter == nil) {
+    __dateFormatter = [[NSDateFormatter alloc] init];
     NSLocale *enUSPOSIXLocale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
-    [dateFormatter setLocale:enUSPOSIXLocale];
-    [dateFormatter setTimeStyle:NSDateFormatterFullStyle];
-    [dateFormatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
-    [dateFormatter setTimeZone:[NSTimeZone timeZoneForSecondsFromGMT:0]];
+    [__dateFormatter setLocale:enUSPOSIXLocale];
+    [__dateFormatter setTimeStyle:NSDateFormatterFullStyle];
+    [__dateFormatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+    [__dateFormatter setTimeZone:[NSTimeZone timeZoneForSecondsFromGMT:0]];
+  }
 
-    return dateFormatter;
+    return __dateFormatter;;
 }
 
 + (BOOL)addSkipBackupAttributeToItemAtURL:(NSURL *)url {

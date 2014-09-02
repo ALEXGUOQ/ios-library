@@ -59,7 +59,7 @@ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // NSObject override
 - (NSString *)description {
-    return [NSString stringWithFormat: @"%@ - %@", self.messageID, self.title];
+    return [NSString stringWithFormat: @"%@ - %@ - %@ - %@",self.messageID, self.messageSent, self.messageID, self.title];
 }
 
 #pragma mark -

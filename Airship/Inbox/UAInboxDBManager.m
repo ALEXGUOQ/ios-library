@@ -31,9 +31,15 @@
 #import "UAirship.h"
 #import "UAConfig.h"
 
+@interface UAInboxDBManager ()
+
+@property (nonatomic, strong) NSManagedObjectContext *backgroundContext;
+
+@end
 
 @implementation UAInboxDBManager
 
+// This returns a static alloc -- it makes non-singleton subclasses impossible without swizzling allocWithZone:. :(
 SINGLETON_IMPLEMENTATION(UAInboxDBManager)
 
 - (id)init {
@@ -44,98 +50,170 @@ SINGLETON_IMPLEMENTATION(UAInboxDBManager)
 
         // Delete the old directory if it exists
         [self deleteOldDatabaseIfExists];
+        [self createManagedObjectContexts];
     }
     
     return self;
 }
 
+#pragma mark - Messages
+
+- (void)getMessagesWithCompletion:(void(^)(NSArray *messages))completion {
+  [self.backgroundContext performBlock:^{
+    NSArray *messages = [self getMessagesInContext:self.backgroundContext];
+    NSArray *messageObjectIDs = [messages valueForKey:@"objectID"];
+    
+    if (completion) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        NSMutableArray *mainThreadMessages = [NSMutableArray array];
+        for (NSManagedObjectID *objectID in messageObjectIDs) {
+          NSError *existingObjectError;
+          NSManagedObject *mainThreadObject = [self.managedObjectContext existingObjectWithID:objectID error:&existingObjectError];
+          
+          if (existingObjectError) {
+            UA_LERR(@"Error fetching existing object with ID: %@, %@, %@", objectID, existingObjectError, [existingObjectError userInfo]);
+          }
+          
+          if (mainThreadObject) {
+            [mainThreadMessages addObject:mainThreadObject];
+          }
+        }
+        completion(mainThreadMessages);
+      });
+    }
+  }];
+}
+
 - (NSArray *)getMessages {
+  return [self getMessagesInContext:self.managedObjectContext];
+}
+
+- (NSArray *)getMessagesInContext:(NSManagedObjectContext *)context {
     NSFetchRequest *request = [[NSFetchRequest alloc] init];
     NSEntityDescription *entity = [NSEntityDescription entityForName:@"UAInboxMessage"
-                                              inManagedObjectContext:self.managedObjectContext];
+                                              inManagedObjectContext:context];
     [request setEntity:entity];
 
-    NSSortDescriptor *sortDescriptor = [[NSSortDescriptor alloc] initWithKey:@"messageSent" ascending:NO];
-    NSArray *sortDescriptors = [[NSArray alloc] initWithObjects:sortDescriptor, nil];
+    NSSortDescriptor *messageSentSortDescriptor = [[NSSortDescriptor alloc] initWithKey:@"messageSent" ascending:NO];
+    NSSortDescriptor *messageIDSortDescriptor = [[NSSortDescriptor alloc] initWithKey:@"messageID" ascending:YES];
+    NSArray *sortDescriptors = [[NSArray alloc] initWithObjects:messageSentSortDescriptor, messageIDSortDescriptor, nil];
     [request setSortDescriptors:sortDescriptors];
 
     NSError *error = nil;
-    NSArray *results = [self.managedObjectContext executeFetchRequest:request error:&error];
-    if (results == nil) {
+    NSArray *results = [context executeFetchRequest:request error:&error];
+
+    NSPredicate *isNotDeletedPredicate = [NSPredicate predicateWithFormat:@"%K == NO", @"isDeleted"];
+    NSArray *notDeletedResults = [results filteredArrayUsingPredicate:isNotDeletedPredicate];
+  
+    if (notDeletedResults == nil) {
         // Handle the error.
         UALOG(@"No results!");
     }
 
-    return results ?: [NSArray array];
+    return notDeletedResults ?: [NSArray array];
 }
 
 - (NSSet *)messageIDs {
+  return [self messageIDsInContext:self.managedObjectContext];
+}
+
+- (NSSet *)messageIDsInContext:(NSManagedObjectContext *)context {
     NSMutableSet *messageIDs = [NSMutableSet set];
-    for (UAInboxMessage *message in [self getMessages]) {
+    for (UAInboxMessage *message in [self getMessagesInContext:context]) {
         [messageIDs addObject:message.messageID];
     }
 
     return messageIDs;
 }
 
+- (UAInboxMessage *)addMessageFromDictionary:(NSDictionary *)dictionary
+                                     context:(NSManagedObjectContext *)context {
+  UAInboxMessage *message = (UAInboxMessage *)[NSEntityDescription insertNewObjectForEntityForName:@"UAInboxMessage"
+                                                                            inManagedObjectContext:context];
+  
+  dictionary = [dictionary dictionaryWithValuesForKeys:[[dictionary keysOfEntriesPassingTest:^BOOL(id key, id obj, BOOL *stop) {
+    return ![obj isEqual:[NSNull null]];
+  }] allObjects]];
+  
+  [self updateMessage:message withDictionary:dictionary];
+  
+  return message;
+}
+
 - (UAInboxMessage *)addMessageFromDictionary:(NSDictionary *)dictionary {
-    UAInboxMessage *message = (UAInboxMessage *)[NSEntityDescription insertNewObjectForEntityForName:@"UAInboxMessage"
-                                                                              inManagedObjectContext:self.managedObjectContext];
-
-    dictionary = [dictionary dictionaryWithValuesForKeys:[[dictionary keysOfEntriesPassingTest:^BOOL(id key, id obj, BOOL *stop) {
-        return ![obj isEqual:[NSNull null]];
-    }] allObjects]];
-
-    [self updateMessage:message withDictionary:dictionary];
-
-    [self saveContext];
-    
-    return message;
+  return [self addMessageFromDictionary:dictionary context:self.managedObjectContext];
 }
 
 - (BOOL)updateMessageWithDictionary:(NSDictionary *)dictionary {
-    UAInboxMessage *message = [self getMessageWithID:[dictionary objectForKey:@"message_id"]];
+  return [self updateMessageWithDictionary:dictionary context:self.managedObjectContext];
+}
 
+- (BOOL)updateMessageWithDictionary:(NSDictionary *)dictionary context:(NSManagedObjectContext *)context{
+    UAInboxMessage *message = [self getMessageWithID:[dictionary objectForKey:@"message_id"] context:context];
+  
     if (!message) {
         return NO;
     }
 
+    [context refreshObject:message mergeChanges:YES];
     [self updateMessage:message withDictionary:dictionary];
     return YES;
 }
 
-- (void)deleteMessages:(NSArray *)messages {
-    for (UAInboxMessage *message in messages) {
-        if ([message isKindOfClass:[NSManagedObject class]]) {
-            UALOG(@"Deleting: %@", message.messageID);
-            [self.managedObjectContext deleteObject:message];
-        }
-    }
+#pragma mark - Delete Messages
 
-    [self saveContext];
+- (void)deleteMessages:(NSArray *)messages context:(NSManagedObjectContext *)context {
+  for (UAInboxMessage *message in messages) {
+    if ([message isKindOfClass:[NSManagedObject class]]) {
+      UALOG(@"Deleting: %@", message.messageID);
+      [context deleteObject:message];
+    }
+  }
+}
+
+- (void)deleteMessages:(NSArray *)messages {
+  [self deleteMessages:messages context:self.managedObjectContext];
+}
+
+- (void)deleteMessagesWithIDs:(NSSet *)messageIDs
+                      context:(NSManagedObjectContext *)context {
+  for (NSString *messageID in messageIDs) {
+    UAInboxMessage *message = [self getMessageWithID:messageID context:context];
+    
+    if (message) {
+      UALOG(@"Deleting: %@", messageID);
+      [context deleteObject:message];
+    }
+  }
 }
 
 - (void)deleteMessagesWithIDs:(NSSet *)messageIDs {
-    for (NSString *messageID in messageIDs) {
-        UAInboxMessage *message = [self getMessageWithID:messageID];
-
-        if (message) {
-            UALOG(@"Deleting: %@", messageID);
-            [self.managedObjectContext deleteObject:message];
-        }
-    }
-
-    [self saveContext];
+  [self deleteMessagesWithIDs:messageIDs context:self.managedObjectContext];
 }
 
-- (void)saveContext {
-    NSError *error = nil;
-    NSManagedObjectContext *context = self.managedObjectContext;
-    if (context) {
-        if ([context hasChanges] && ![context save:&error]) {
-            UA_LERR(@"Unresolved error %@, %@", error, [error userInfo]);
-        }
-    }
+#pragma mark - Core Data
+
+- (void)performBackgroundActionAndSave:(void(^)(NSManagedObjectContext *context))action
+                            completion:(void(^)(NSError *saveError))completion {
+  [self.backgroundContext performBlock:^{
+    action(self.backgroundContext);
+    
+    [self saveBackgroundContextWithCompletion:completion];
+  }];
+}
+
+- (void)saveBackgroundContextWithCompletion:(void(^)(NSError *saveError))completion {
+  NSError *saveError = nil;
+  BOOL hasChanges = [self.backgroundContext hasChanges];
+  if (hasChanges && [self.backgroundContext save:&saveError] == NO) {
+    UA_LERR(@"Unresolved error %@, %@", saveError, [saveError userInfo]);
+  }
+  
+  if (completion) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      completion(saveError);
+    });
+  }
 }
 
 
@@ -143,17 +221,61 @@ SINGLETON_IMPLEMENTATION(UAInboxDBManager)
  Returns the managed object context for the application.
  If the context doesn't already exist, it is created and bound to the persistent store coordinator for the application.
  */
-- (NSManagedObjectContext *)managedObjectContext {
-    if (_managedObjectContext) {
-        return _managedObjectContext;
-    }
+- (void)createManagedObjectContexts {
+  if (_managedObjectContext == nil) {
+    _managedObjectContext = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSMainQueueConcurrencyType];
+    _managedObjectContext.persistentStoreCoordinator = self.persistentStoreCoordinator;
+    _managedObjectContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy;
+    
+    [[NSNotificationCenter defaultCenter]
+     addObserver:self
+     selector:@selector(mainContextDidSave:)
+     name:NSManagedObjectContextDidSaveNotification
+     object:_managedObjectContext];
+  }
+  
+  if (_backgroundContext == nil) {
+    _backgroundContext = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSPrivateQueueConcurrencyType];
+    _backgroundContext.persistentStoreCoordinator = self.persistentStoreCoordinator;
+    _backgroundContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy;
+    
+    [[NSNotificationCenter defaultCenter]
+     addObserver:self
+     selector:@selector(backgroundContextDidSave:)
+     name:NSManagedObjectContextDidSaveNotification
+     object:_backgroundContext];
+  }
+}
 
-    NSPersistentStoreCoordinator *coordinator = [self persistentStoreCoordinator];
-    if (coordinator != nil) {
-        _managedObjectContext = [[NSManagedObjectContext alloc] init];
-        [_managedObjectContext setPersistentStoreCoordinator:coordinator];
-    }
-    return _managedObjectContext;
+- (void)cleanUpManagedObjectContexts {
+  [[NSNotificationCenter defaultCenter]
+   removeObserver:self
+   name:NSManagedObjectContextDidSaveNotification
+   object:_backgroundContext];
+  [[NSNotificationCenter defaultCenter]
+   removeObserver:self
+   name:NSManagedObjectContextDidSaveNotification
+   object:_managedObjectContext];
+  
+  self.backgroundContext = nil;
+  self.managedObjectContext = nil;
+}
+
+- (void)mainContextDidSave:(NSNotification *)note {
+  [self mergeChangesInContext:[self backgroundContext]
+              forNotification:note];
+}
+
+- (void)backgroundContextDidSave:(NSNotification *)note {
+  [self mergeChangesInContext:[self managedObjectContext]
+              forNotification:note];
+}
+
+- (void)mergeChangesInContext:(NSManagedObjectContext *)context
+              forNotification:(NSNotification *)note {
+  [context performBlock:^{
+    [context mergeChangesFromContextDidSaveNotification:note];
+  }];
 }
 
 /**
@@ -242,65 +364,88 @@ SINGLETON_IMPLEMENTATION(UAInboxDBManager)
     }
 }
 
+#pragma mark - Expired Message Deletion
+
 - (void)deleteExpiredMessages {
-    NSFetchRequest *request = [[NSFetchRequest alloc] init];
-    NSEntityDescription *entity = [NSEntityDescription entityForName:@"UAInboxMessage"
-                                              inManagedObjectContext:self.managedObjectContext];
-    [request setEntity:entity];
-
-    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"messageExpiration < %@", [NSDate date]];
-    [request setPredicate:predicate];
-
-    NSError *error = nil;
-    NSArray *results = [self.managedObjectContext executeFetchRequest:request error:&error];
-
-    for (UAInboxMessage *message in results) {
-        UA_LDEBUG(@"Deleting expired message: %@", message.messageID);
-        [self.managedObjectContext deleteObject:message];
-    }
-
-    [self saveContext];
+  [self deleteExpiredMessagesInContext:self.managedObjectContext];
 }
 
-- (void)deleteOldDatabaseIfExists {
-    NSArray *libraryDirectories = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
-    NSString *libraryDirectory = [libraryDirectories objectAtIndex:0];
-    NSString *dbPath = [libraryDirectory stringByAppendingPathComponent:OLD_DB_NAME];
-
-    if ([[NSFileManager defaultManager] fileExistsAtPath:dbPath]) {
-        [[NSFileManager defaultManager] removeItemAtPath:dbPath error:nil];
+- (void)deleteExpiredMessagesInContext:(NSManagedObjectContext *)managedObjectContext {
+  NSFetchRequest *request = [[NSFetchRequest alloc] init];
+  NSEntityDescription *entity = [NSEntityDescription entityForName:@"UAInboxMessage"
+                                            inManagedObjectContext:managedObjectContext];
+  [request setEntity:entity];
+  
+  NSPredicate *predicate = [NSPredicate predicateWithFormat:@"messageExpiration < %@", [NSDate date]];
+  [request setPredicate:predicate];
+  
+  NSError *countError = nil;
+  NSInteger expiredMessageCount = [managedObjectContext countForFetchRequest:request error:&countError];
+  
+  if (expiredMessageCount == NSNotFound) {
+    UA_LERR(@"Error fetching expired message count: %@, %@", countError, [countError userInfo]);
+  }
+  else if (expiredMessageCount > 0) {
+    NSError *error = nil;
+    NSArray *results = [managedObjectContext executeFetchRequest:request error:&error];
+    if (error) {
+      UA_LERR(@"Expired message fetch error: %@, %@", error, [error userInfo]);
     }
+    
+    for (UAInboxMessage *message in results) {
+      UA_LDEBUG(@"Deleting expired message: %@", message.messageID);
+      [managedObjectContext deleteObject:message];
+    }
+  }
+}
+
+//- (void)deleteExpiredMessagesWithCompletion:(void(^)(void))completion {
+//    [self performBackgroundActionAndSave:^(NSManagedObjectContext *context){
+//      [self deleteExpiredMessages:context];
+//    } completion:^(NSError *saveError) {
+//      if (completion) {
+//        completion();
+//      }
+//    }];
+//}
+
+#pragma mark - Get Messages
+
+-(UAInboxMessage *)getMessageWithID:(NSString *)messageID context:(NSManagedObjectContext *)context {
+  if (!messageID) {
+    return nil;
+  }
+  
+  NSFetchRequest *request = [[NSFetchRequest alloc] init];
+  NSEntityDescription *entity = [NSEntityDescription entityForName:@"UAInboxMessage"
+                                            inManagedObjectContext:context];
+  [request setEntity:entity];
+  
+  
+  NSPredicate *predicate = [NSPredicate predicateWithFormat:@"messageID == %@", messageID];
+  [request setPredicate:predicate];
+  
+  NSError *error = nil;
+  NSArray *results = [context executeFetchRequest:request error:&error];
+  
+  if (error) {
+    UA_LWARN("Error when retrieving message with id %@", messageID);
+    return nil;
+  }
+  
+  
+  if (!results || !results.count) {
+    return nil;
+  }
+  
+  return (UAInboxMessage *)[results lastObject];
 }
 
 -(UAInboxMessage *)getMessageWithID:(NSString *)messageID {
-    if (!messageID) {
-        return nil;
-    }
-
-    NSFetchRequest *request = [[NSFetchRequest alloc] init];
-    NSEntityDescription *entity = [NSEntityDescription entityForName:@"UAInboxMessage"
-                                              inManagedObjectContext:self.managedObjectContext];
-    [request setEntity:entity];
-
-
-    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"messageID == %@", messageID];
-    [request setPredicate:predicate];
-
-    NSError *error = nil;
-    NSArray *results = [self.managedObjectContext executeFetchRequest:request error:&error];
-
-    if (error) {
-        UA_LWARN("Error when retrieving message with id %@", messageID);
-        return nil;
-    }
-
-
-    if (!results || !results.count) {
-        return nil;
-    }
-
-    return (UAInboxMessage *)[results lastObject];
+  return [self getMessageWithID:messageID context:self.managedObjectContext];
 }
+
+#pragma mark - Store Management
 
 - (NSURL *)getStoreDirectoryURL {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -321,5 +466,25 @@ SINGLETON_IMPLEMENTATION(UAInboxDBManager)
     return directoryURL;
 }
 
+- (void)deleteOldDatabaseIfExists {
+  NSArray *libraryDirectories = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
+  NSString *libraryDirectory = [libraryDirectories objectAtIndex:0];
+  NSString *dbPath = [libraryDirectory stringByAppendingPathComponent:OLD_DB_NAME];
+  
+  if ([[NSFileManager defaultManager] fileExistsAtPath:dbPath]) {
+    [[NSFileManager defaultManager] removeItemAtPath:dbPath error:nil];
+  }
+}
+
+- (void)saveContext {
+  NSError *saveError = nil;
+  if ([self.managedObjectContext save:&saveError] == NO) {
+    UA_LERR(@"Main context save error: %@, %@", saveError, [saveError userInfo]);
+  }
+}
+
+- (void)dealloc {
+  [self cleanUpManagedObjectContexts];
+}
 
 @end

@@ -100,6 +100,8 @@ typedef enum {
  */
 - (UADisposable *)retrieveMessageListWithDelegate:(id<UAInboxMessageListDelegate>)delegate;
 
+- (void)loadSavedMessagesWithCompletion:(void(^)(NSArray *messages))completion;
+
 
 /**
  * Fetch new messages from the server.  This will result in a

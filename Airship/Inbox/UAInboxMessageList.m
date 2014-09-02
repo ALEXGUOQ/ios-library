@@ -90,6 +90,21 @@ NSString * const UAInboxMessageListUpdatedNotification = @"com.urbanairship.noti
 }
 
 #pragma mark Update/Delete/Mark Messages
+- (void)loadSavedMessagesWithCompletion:(void(^)(NSArray *messages))completion {
+  UAInboxDBManager *inboxDBManager = [UAInboxDBManager shared];
+  [inboxDBManager performBackgroundActionAndSave:^(NSManagedObjectContext *context) {
+    [inboxDBManager deleteExpiredMessagesInContext:context];
+  } completion:^(NSError *saveError) {
+    [inboxDBManager getMessagesWithCompletion:^(NSArray *messages){
+      self.messages = [messages mutableCopy];
+      UA_LDEBUG(@"Loaded saved messages: %@.", self.messages);
+      
+      if (completion) {
+        completion(self.messages);
+      }
+    }];
+  }];
+}
 
 - (void)loadSavedMessages {
     [[UAInboxDBManager shared] deleteExpiredMessages];
@@ -118,39 +133,44 @@ NSString * const UAInboxMessageListUpdatedNotification = @"com.urbanairship.noti
 
     [self notifyObservers: @selector(messageListWillLoad)];
     [self sendMessageListWillUpdateNotification];
+  
+  self.isRetrieving = YES;
+  
+  __block BOOL isCallbackCancelled = NO;
+  
+  UADisposable *disposable = [UADisposable disposableWithBlock:^{
+    isCallbackCancelled = YES;
+  }];
 
-    [self loadSavedMessages];
-
-    self.isRetrieving = YES;
-
-    __block BOOL isCallbackCancelled = NO;
-
-    UADisposable *disposable = [UADisposable disposableWithBlock:^{
-        isCallbackCancelled = YES;
-    }];
-
-    [self.client retrieveMessageListOnSuccess:^(NSMutableArray *newMessages, NSUInteger unread){
+    [self loadSavedMessagesWithCompletion:^(NSArray *messages) {
+      [self.client retrieveMessageListOnSuccess:^(NSMutableArray *newMessages, NSUInteger unread){
         self.isRetrieving = NO;
-
+        
+        NSSortDescriptor *dateSortDescriptor = [[NSSortDescriptor alloc] initWithKey:@"messageSent"
+                                                                           ascending:NO];
+        NSSortDescriptor *messageIDDescriptor = [[NSSortDescriptor alloc] initWithKey:@"messageID"
+                                                                            ascending:YES];
+        [newMessages sortUsingDescriptors:@[dateSortDescriptor, messageIDDescriptor]];
         self.messages = newMessages;
-        self.unreadCount = (NSInteger)unread;
-
+        self.unreadCount = unread;
+        
         UA_LDEBUG(@"Retrieve message list succeeded with messages: %@", self.messages);
         if (successBlock && !isCallbackCancelled) {
-            successBlock();
+          successBlock();
         }
         [self notifyObservers:@selector(messageListLoaded)];
         [self sendMessageListUpdatedNotification];
-    } onFailure:^(UAHTTPRequest *request){
+      } onFailure:^(UAHTTPRequest *request){
         self.isRetrieving = NO;
-
+        
         UA_LDEBUG(@"Retrieve message list failed with status: %ld", (long)request.response.statusCode);
         if (failureBlock && !isCallbackCancelled) {
-            failureBlock();
+          failureBlock();
         }
-
+        
         [self notifyObservers:@selector(inboxLoadFailed)];
         [self sendMessageListUpdatedNotification];
+      }];
     }];
 
     return disposable;
@@ -200,17 +220,38 @@ NSString * const UAInboxMessageListUpdatedNotification = @"com.urbanairship.noti
     void (^succeed)(void) = ^{
         self.isBatchUpdating = NO;
 
-        for (UAInboxMessage *msg in updateMessageArray) {
-            if (msg.unread) {
-                msg.unread = NO;
+      NSArray *objectIDs = [self.messages valueForKey:@"objectID"];
+      
+      [[UAInboxDBManager shared]
+       performBackgroundActionAndSave:^(NSManagedObjectContext *context) {
+        
+        for (NSManagedObjectID *objectID in objectIDs) {
+          NSError *existingObjectError;
+          UAInboxMessage *message = [context existingObjectWithID:objectID
+                                                            error:&existingObjectError];
+          
+          if (existingObjectError) {
+            UA_LERR(@"Error fetching existing object with ID: %@, %@, %@", objectID, existingObjectError, [existingObjectError userInfo]);
+          }
+          
+          if (message) {
+            [context refreshObject:message
+                      mergeChanges:YES];
+            
+            if ([message isDeleted] == NO) {
+              if (message.unread) {
+                message.unread = NO;
                 self.unreadCount -= 1;
+              }
             }
+          }
         }
-
+      } completion:^(NSError *saveError) {
         if (successBlock && !isCallbackCancelled) {
-            successBlock();
+          successBlock();
         }
         [self sendMessageListUpdatedNotification];
+      }];
     };
 
     void (^fail)(UAHTTPRequest *) = ^(UAHTTPRequest *request){
@@ -237,7 +278,6 @@ NSString * const UAInboxMessageListUpdatedNotification = @"com.urbanairship.noti
     } else if (command == UABatchReadMessages) {
         UA_LDEBUG("Marking messages as read: %@", updateMessageArray);
         [self.client performBatchMarkAsReadForMessages:updateMessageArray onSuccess:^{
-            [[UAInboxDBManager shared] saveContext];
             [self notifyObservers:@selector(batchMarkAsReadFinished)];
             succeed();
         }onFailure:^(UAHTTPRequest *request){

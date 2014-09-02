@@ -48,6 +48,8 @@ SINGLETON_INTERFACE(UAInboxDBManager);
  *
  * @return NSArray of UAInboxMessages
  */
+- (void)getMessagesWithCompletion:(void(^)(NSArray *messages))completion;
+- (NSArray *)getMessagesInContext:(NSManagedObjectContext *)context;
 - (NSArray *)getMessages;
 
 /**
@@ -56,6 +58,8 @@ SINGLETON_INTERFACE(UAInboxDBManager);
  * Urban Airship JSON API for retrieving inbox messages.
  * @return A message, populated with data from the message dictionary.
  */
+- (UAInboxMessage *)addMessageFromDictionary:(NSDictionary *)dictionary
+                                     context:(NSManagedObjectContext *)context;
 - (UAInboxMessage *)addMessageFromDictionary:(NSDictionary *)dictionary;
 
 
@@ -68,6 +72,8 @@ SINGLETON_INTERFACE(UAInboxDBManager);
  * @return YES if the message was updated, NO otherwise.
  */
 - (BOOL)updateMessageWithDictionary:(NSDictionary *)dictionary;
+- (BOOL)updateMessageWithDictionary:(NSDictionary *)dictionary
+                            context:(NSManagedObjectContext *)context;
 
 /**
  * Deletes a list of messages from the database
@@ -79,6 +85,7 @@ SINGLETON_INTERFACE(UAInboxDBManager);
  * Deletes a set of messages from the database
  * @param messageIDs NSArray of the messages IDs to be deleted
  */
+- (void)deleteMessagesWithIDs:(NSSet *)messageIDs context:(NSManagedObjectContext *)context;
 - (void)deleteMessagesWithIDs:(NSSet *)messageIDs;
 
 /**
@@ -86,9 +93,13 @@ SINGLETON_INTERFACE(UAInboxDBManager);
  * @return An NSSet of message ids
  */
 - (NSSet *)messageIDs;
+- (NSSet *)messageIDsInContext:(NSManagedObjectContext *)context;
+
 /**
  * Saves any changes to the database
  */
 - (void)saveContext;
+- (void)performBackgroundActionAndSave:(void(^)(NSManagedObjectContext *context))action
+                            completion:(void(^)(NSError *saveError))completion;
 
 @end
