@@ -245,32 +245,33 @@ NSString * const UAInboxMessageListUpdatedNotification = @"com.urbanairship.noti
     };
 
     void (^succeed)(void) = ^{
-      NSArray *objectIDs = [self.messages valueForKey:@"objectID"];
+        NSArray *objectIDs = [self.messages valueForKey:@"objectID"];
       
-      [[UAInboxDBManager shared]
-       performBackgroundActionAndSave:^(NSManagedObjectContext *context) {
-        
-        for (NSManagedObjectID *objectID in objectIDs) {
-          NSError *existingObjectError;
-          UAInboxMessageData *message = [context existingObjectWithID:objectID
-                                                            error:&existingObjectError];
-          
-          if (existingObjectError) {
-            UA_LERR(@"Error fetching existing object with ID: %@, %@, %@", objectID, existingObjectError, [existingObjectError userInfo]);
-          }
-          
-          if (message) {
-            [context refreshObject:message
-                      mergeChanges:YES];
-            
-            if ([message isDeleted] == NO) {
-              if (message.unread) {
-                message.unread = NO;
-                self.unreadCount -= 1;
-              }
-            }
-          }
-        }
+        [[UAInboxDBManager shared]
+         performBackgroundActionAndSave:^(NSManagedObjectContext *context) {
+             
+             for (NSManagedObjectID *objectID in objectIDs) {
+                 NSError *existingObjectError;
+                 NSManagedObject *managedObject = [context existingObjectWithID:objectID
+                                                                          error:&existingObjectError];
+                 UAInboxMessageData *message = (UAInboxMessageData *)managedObject;
+                 
+                 if (existingObjectError) {
+                     UA_LERR(@"Error fetching existing object with ID: %@, %@, %@", objectID, existingObjectError, [existingObjectError userInfo]);
+                 }
+                 
+                 if (message) {
+                     [context refreshObject:message
+                               mergeChanges:YES];
+                     
+                     if ([message isDeleted] == NO) {
+                         if (message.unread) {
+                             message.unread = NO;
+                             self.unreadCount -= 1;
+                         }
+                     }
+                 }
+             }
       } completion:^(NSError *saveError) {
         if (successBlock && !isCallbackCancelled) {
           successBlock();

@@ -35,7 +35,7 @@
 /**
  * Delete any expired messages
  */
-- (void)deleteExpiredMessagesWithCompletion:(void(^)(void))completion;
+- (void)deleteExpiredMessagesWithCompletion:(void(^)(NSError *saveError))completion;
 - (void)deleteExpiredMessagesInContext:(NSManagedObjectContext *)managedObjectContext;
 - (void)deleteExpiredMessages;
 
