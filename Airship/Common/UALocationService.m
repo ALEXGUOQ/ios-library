@@ -317,6 +317,13 @@ didChangeAuthorizationStatus:(CLAuthorizationStatus)status {
         self.significantChangeProvider = [[UASignificantChangeProvider alloc] init];
     }
 
+    CLAuthorizationStatus status = [CLLocationManager authorizationStatus];
+
+    // kCLAuthorizationStatusAuthorizedWhenInUse = 5
+    if ([self.significantChangeProvider.locationManager respondsToSelector:NSSelectorFromString(@"requestAlwaysAuthorization")] && status == 5) {
+        UA_LERR(@"Significant change location requires always authorization");
+        return;
+    }
     [self startReportingLocationWithProvider:self.significantChangeProvider];
 }
 
@@ -382,6 +389,10 @@ didChangeAuthorizationStatus:(CLAuthorizationStatus)status {
         // This eventually calls stopSingleLocation, which shuts down the background task
         // Same task as performSelector:withObject:afterDelay, so if that works, this works
         [self shutdownSingleLocationWithTimeoutError];
+
+        if (self.singleLocationBackgroundIdentifier != UIBackgroundTaskInvalid) {
+            [[UIApplication sharedApplication] endBackgroundTask:self.singleLocationBackgroundIdentifier];
+        }
     }];
     self.singleLocationProvider.delegate = self;
     [self.singleLocationProvider startReportingLocation];
@@ -635,17 +646,13 @@ didChangeAuthorizationStatus:(CLAuthorizationStatus)status {
 
 + (BOOL)locationServiceAuthorized {
     switch ([CLLocationManager authorizationStatus]) {
-        case kCLAuthorizationStatusNotDetermined:
-        case kCLAuthorizationStatusAuthorized:
-            return YES;
         case kCLAuthorizationStatusDenied:
         case kCLAuthorizationStatusRestricted:
             return NO;
+        case kCLAuthorizationStatusNotDetermined:
         default:
-            UALOG(@"Unexpected value for authorization");
-            return NO;
-    }
-}
+            return YES;
+    }}
 
 // convenience method for devs
 + (BOOL)coreLocationWillPromptUserForPermissionToRun {

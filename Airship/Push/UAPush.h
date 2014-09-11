@@ -129,7 +129,6 @@
  */
 - (void)playNotificationSound:(NSString *)soundFilename;
 
-
 /**
  * Called when a push notification is received in the foreground with a badge number.
  * @param badgeNumber The badge number to display
@@ -138,11 +137,11 @@
 
 /**
  * Called when a push notification is received while the app is running in the foreground.
+ * Overridden by receivedForegroundNotification:fetchCompletionHandler.
  *
  * @param notification The notification dictionary.
  */
 - (void)receivedForegroundNotification:(NSDictionary *)notification;
-
 
 /**
  * Called when a push notification is received while the app is running in the foreground 
@@ -155,6 +154,15 @@
 
 /**
  * Called when a push notification is received while the app is running in the background
+ * for applications with the "remote-notification" background mode.  
+ * Overridden by receivedBackgroundNotification:fetchCompletionHandler.
+ *
+ * @param notification The notification dictionary.
+ */
+- (void)receivedBackgroundNotification:(NSDictionary *)notification;
+
+/**
+ * Called when a push notification is received while the app is running in the background
  * for applications with the "remote-notification" background mode.
  *
  * @param notification The notification dictionary.
@@ -163,20 +171,12 @@
 - (void)receivedBackgroundNotification:(NSDictionary *)notification fetchCompletionHandler:(void (^)(UIBackgroundFetchResult result))completionHandler;
 
 /**
- * Called when a push notification is received while the app is running in the background.
- *
- * @param notification The notification dictionary.
- */
-- (void)receivedBackgroundNotification:(NSDictionary *)notification;
-
-
-/**
  * Called when the app is started or resumed because a user opened a notification.
+ * Overridden by launchedFromNotification:fetchCompletionHandler.
  *
  * @param notification The notification dictionary.
  */
 - (void)launchedFromNotification:(NSDictionary *)notification;
-
 
 /**
  * Called when the app is started or resumed because a user opened a notification
@@ -252,6 +252,24 @@ SINGLETON_INTERFACE(UAPush);
  * @param enabled The default value for push enabled
  */
 + (void)setDefaultPushEnabledValue:(BOOL)enabled;
+
+/**
+ * This setting controls the underlying behavior of the SDK when user notifications are disabled.
+ * When set to 'NO' and user notifications are disabled with the userPushNotificationsEnabled
+ * property, this SDK will mark the device as opted-out on the Urban Airship server but the OS-level
+ * settings will still show this device as able to receive user notifications.
+ *
+ * This is a temporary flag to work around an issue in iOS 8 where
+ * unregistering user notification types may prevent the device from being able to
+ * register with other types without a device restart. It will be removed once
+ * the issue is addressed in iOS 8.
+ *
+ * This setting defaults to 'NO' and will log a warning if set to 'YES'.
+ *
+ * @warning If this is set to YES, the application may not be able to re-register for push
+ * until the device has been restarted (due to a bug in iOS 8).
+ */
+@property (nonatomic, assign) BOOL allowUnregisteringUserNotificationTypes;
 
 /**
  * The device token for this device, as a hex string.
@@ -512,5 +530,10 @@ SINGLETON_INTERFACE(UAPush);
  */
 - (void)handleNotification:(NSDictionary *)notification applicationState:(UIApplicationState)state fetchCompletionHandler:(void (^)(UIBackgroundFetchResult result))completionHandler;
 
+
+/**
+ * Gets the current enabled notification types.
+ */
++ (NSUInteger)currentEnabledNotificationTypes;
 
 @end

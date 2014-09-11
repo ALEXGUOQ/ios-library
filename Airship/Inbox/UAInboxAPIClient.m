@@ -10,6 +10,7 @@
 #import "UAUtils.h"
 #import "NSJSONSerialization+UAAdditions.h"
 #import "UAInboxDBManager+Internal.h"
+#import <CoreData/NSManagedObjectContext.h>
 
 @interface UAInboxAPIClient()
 
@@ -18,6 +19,9 @@
 @end
 
 @implementation UAInboxAPIClient
+
+NSString *const UALastMessageListModifiedTime = @"UALastMessageListModifiedTime.%@";
+
 
 - (id)init {
     self = [super init];
@@ -39,13 +43,18 @@
     return request;
 }
 
-- (UAHTTPRequest *)requestToRetrieveMessageList {
+- (UAHTTPRequest *)requestToRetrieveMessageListForUser:(NSString *)userName {
     NSString *urlString = [NSString stringWithFormat: @"%@%@%@%@",
-                           [UAirship shared].config.deviceAPIURL, @"/api/user/", [UAUser defaultUser].username ,@"/messages/"];
+                           [UAirship shared].config.deviceAPIURL, @"/api/user/", userName,@"/messages/"];
     NSURL *requestUrl = [NSURL URLWithString: urlString];
 
     UAHTTPRequest *request = [UAUtils UAHTTPUserRequestWithURL:requestUrl method:@"GET"];
     
+    NSString *lastModified = [[NSUserDefaults standardUserDefaults] stringForKey:[NSString stringWithFormat:UALastMessageListModifiedTime, userName]];
+    if (lastModified) {
+        [request addRequestHeader:@"If-Modified-Since" value:lastModified];
+    }
+
     UA_LTRACE(@"Request to retrieve message list: %@", urlString);
     return request;
 }
@@ -132,84 +141,57 @@
      }];
 }
 
-- (void)retrieveMessageListOnSuccess:(UAInboxClientRetrievalSuccessBlock)successBlock
+- (void)retrieveMessageListOnSuccess:(UAInboxClientMessageRetrievalSuccessBlock)successBlock
                            onFailure:(UAInboxClientFailureBlock)failureBlock {
-
-    UAHTTPRequest *retrieveRequest = [self requestToRetrieveMessageList];
+    
+    NSString *userName = [UAUser defaultUser].username;
+    UAHTTPRequest *retrieveRequest = [self requestToRetrieveMessageListForUser:userName];
     
     [self.requestEngine
-      runRequest:retrieveRequest
-      succeedWhere:^(UAHTTPRequest *request){
-          return (BOOL)(request.response.statusCode == 200);
-      } retryWhere:^(UAHTTPRequest *request){
-          return NO;
-      } onSuccess:^(UAHTTPRequest *request, NSUInteger lastDelay){
-        UAInboxDBManager *inboxDBManager = [UAInboxDBManager shared];
-        NSInteger __block unread;
-        NSArray * __block fetchedMessageObjectIDs = nil;
-        NSString *responseString = [request.responseString copy];
-        
-        [inboxDBManager performBackgroundActionAndSave:^(NSManagedObjectContext *context) {
-          NSDictionary *jsonResponse = [NSJSONSerialization objectWithString:responseString];
-          UA_LTRACE(@"Retrieved message list response: %@", responseString);
-          
-          NSMutableSet *responseMessageIDs = [NSMutableSet set];
-          
-          // Convert dictionary to objects for convenience
-          for (NSDictionary *message in [jsonResponse objectForKey:@"messages"]) {
-            if (![inboxDBManager updateMessageWithDictionary:message
-                                                     context:context]) {
-              UAInboxMessage *tmp = [inboxDBManager addMessageFromDictionary:message
-                                                                     context:context];
-              tmp.inbox = [UAInbox shared].messageList;
-            }
-            
-            NSString *messageID = [message valueForKey:@"message_id"];
-            if (messageID) {
-              [responseMessageIDs addObject:messageID];
-            }
-          }
-          
-          unread = [[jsonResponse objectForKey: @"badge"] integerValue];
-          if (unread < 0) {
-            unread = 0;
-          }
-          
-          // Delete server side deleted messages
-          NSMutableSet *messagesToDelete = [[inboxDBManager messageIDsInContext:context] mutableCopy];
-          [messagesToDelete minusSet:responseMessageIDs];
-          [inboxDBManager deleteMessagesWithIDs:messagesToDelete context:context];
-          
-          // Delete any expired messages
-          [inboxDBManager deleteExpiredMessagesInContext:context];
-          NSArray *messages = [inboxDBManager getMessagesInContext:context];
-          NSError *permantentIdError = nil;
-          if (![context obtainPermanentIDsForObjects:messages
-                                               error:&permantentIdError]) {
-            UA_LERR(@"Error obtaining permanent IDs: %@", permantentIdError);
-          }
-          fetchedMessageObjectIDs = [[messages valueForKey:@"objectID"] copy];
-        } completion:^(NSError *saveError) {
-          NSMutableArray *fetchedMessages = [NSMutableArray array];
-          for (NSManagedObjectID *objectID in fetchedMessageObjectIDs) {
-            UAInboxMessage *message = (UAInboxMessage *)[[inboxDBManager managedObjectContext] objectWithID:objectID];
-            if (message) {
-              [fetchedMessages addObject:message];
-            }
-          }
-          if (successBlock) {
-            successBlock(fetchedMessages, unread);
-          } else {
-            UA_LERR(@"missing successBlock");
-          }
-        }];
-      } onFailure:^(UAHTTPRequest *request, NSUInteger lastDelay){
-          if (failureBlock) {
-              failureBlock(request);
-          } else {
-              UA_LERR(@"missing failureBlock");
-          }
-      }];
+     runRequest:retrieveRequest
+     succeedWhere:^(UAHTTPRequest *request){
+         return (BOOL)(request.response.statusCode == 200 || request.response.statusCode == 304);
+     } retryWhere:^(UAHTTPRequest *request){
+         return NO;
+     } onSuccess:^(UAHTTPRequest *request, NSUInteger lastDelay){
+         UAInboxDBManager *inboxDBManager = [UAInboxDBManager shared];
+         NSInteger unread = 0;
+         NSArray *messages = nil;
+         NSInteger statusCode = request.response.statusCode;
+         
+         if (statusCode == 200) {
+             NSDictionary *headers = request.response.allHeaderFields;
+             NSString *lastModified = [headers objectForKey:@"Last-Modified"];
+             
+             UA_LDEBUG(@"Setting Last-Modified time to '%@' for user %@'s message list.", lastModified, userName);
+             [[NSUserDefaults standardUserDefaults] setValue:lastModified
+                                                      forKey:[NSString stringWithFormat:UALastMessageListModifiedTime, userName]];
+             
+             NSString *responseString = request.responseString;
+             UA_LTRACE(@"Retrieved message list response: %@", responseString);
+             
+             NSDictionary *jsonResponse = [NSJSONSerialization objectWithString:responseString];
+             messages = [jsonResponse objectForKey:@"messages"];
+             
+             unread = [[jsonResponse objectForKey: @"badge"] integerValue];
+             if (unread < 0) {
+                 unread = 0;
+             }
+         }
+         
+         
+         if (successBlock) {
+             successBlock(statusCode, messages, unread);
+         } else {
+             UA_LERR(@"missing successBlock");
+         }
+     } onFailure:^(UAHTTPRequest *request, NSUInteger lastDelay){
+         if (failureBlock) {
+             failureBlock(request);
+         } else {
+             UA_LERR(@"missing failureBlock");
+         }
+     }];
 }
 
 - (void)performBatchDeleteForMessages:(NSArray *)messages
@@ -264,6 +246,10 @@
              UA_LERR(@"missing failureBlock");
          }
      }];
+}
+
+- (void)cancelAllRequests {
+    [self.requestEngine cancelAllRequests];
 }
 
 @end

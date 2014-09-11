@@ -39,6 +39,10 @@
 #import "UAChannelRegistrationPayload.h"
 #import "UAUser.h"
 
+#define kUAMinTagLength 1
+#define kUAMaxTagLength 127
+
+
 UAPushSettingsKey *const UAPushEnabledSettingsKey = @"UAPushEnabled";
 UAPushSettingsKey *const UAPushAliasSettingsKey = @"UAPushAlias";
 UAPushSettingsKey *const UAPushTagsSettingsKey = @"UAPushTags";
@@ -54,7 +58,6 @@ UAPushSettingsKey *const UAPushDeviceCanEditTagsKey = @"UAPushDeviceCanEditTags"
 
 UAPushUserInfoKey *const UAPushUserInfoRegistration = @"Registration";
 UAPushUserInfoKey *const UAPushUserInfoPushEnabled = @"PushEnabled";
-
 UAPushUserInfoKey *const UAPushChannelCreationOnForeground = @"UAPushChannelCreationOnForeground";
 
 
@@ -162,6 +165,21 @@ static Class _uiClass;
 #pragma mark -
 #pragma mark Get/Set Methods
 
+
+- (void)setNotificationTypes:(UIRemoteNotificationType)notificationTypes {
+    if (notificationTypes == UIRemoteNotificationTypeNone && [[UIApplication sharedApplication] respondsToSelector:NSSelectorFromString(@"registerUserNotificationSettings:")]) {
+        UA_LWARN(@"Registering for UIRemoteNotificationTypeNone may disable the ability to register for other types without restarting the device first.");
+    }
+    _notificationTypes = notificationTypes;
+}
+
+- (void)setAllowUnregisteringUserNotificationTypes:(BOOL)allowUnregisteringUserNotificationTypes {
+    if (allowUnregisteringUserNotificationTypes) {
+        UA_LWARN(@"Allowing UAPush to unregister for notification types may disable the ability to register for other types without restarting the device first.");
+    }
+    _allowUnregisteringUserNotificationTypes = allowUnregisteringUserNotificationTypes;
+}
+
 - (void)setChannelID:(NSString *)channelID {
     [[NSUserDefaults standardUserDefaults] setValue:channelID forKey:UAPushChannelIDKey];
     // Log the channel ID at error level, but without logging
@@ -196,7 +214,8 @@ static Class _uiClass;
 }
 
 - (void)setAlias:(NSString *)alias {
-    [[NSUserDefaults standardUserDefaults] setObject:alias forKey:UAPushAliasSettingsKey];
+    NSString * trimmedAlias = [alias stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    [[NSUserDefaults standardUserDefaults] setObject:trimmedAlias forKey:UAPushAliasSettingsKey];
 }
 
 - (NSArray *)tags {
@@ -204,11 +223,36 @@ static Class _uiClass;
     if (!currentTags) {
         currentTags = [NSArray array];
     }
+    
+    NSArray *normalizedTags = [self normalizeTags:currentTags];
+    
+    //sync tags to prevent the tags property invocation from constantly logging tag set failure
+    if ([currentTags count] != [normalizedTags count]) {
+        [self setTags:normalizedTags];
+    }
+
     return currentTags;
 }
 
 - (void)setTags:(NSArray *)tags {
-    [[NSUserDefaults standardUserDefaults] setObject:tags forKey:UAPushTagsSettingsKey];
+    [[NSUserDefaults standardUserDefaults] setObject:[self normalizeTags:tags] forKey:UAPushTagsSettingsKey];
+}
+
+-(NSArray *)normalizeTags:(NSArray *)tags {
+    NSMutableArray *normalizedTags = [[NSMutableArray alloc] init];
+
+    for (NSString *tag in tags) {
+        
+        NSString *trimmedTag = [tag stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+
+        if ([trimmedTag length] >= kUAMinTagLength && [trimmedTag length] <= kUAMaxTagLength) {
+            [normalizedTags addObject:trimmedTag];
+        } else {
+            UA_LERR(@"Tags must be > 0 and < 128 characters in length, tag %@ has been removed from the tag set", tag);
+        }
+    }
+    
+    return [NSArray arrayWithArray:normalizedTags];
 }
 
 - (void)addTagsToCurrentDevice:(NSArray *)tags {
@@ -232,10 +276,27 @@ static Class _uiClass;
 
         if (enabled) {
             UA_LDEBUG(@"Registering for remote notifications.");
-            [[UIApplication sharedApplication] registerForRemoteNotificationTypes:self.notificationTypes];
+
+            if ([[UIApplication sharedApplication] respondsToSelector:NSSelectorFromString(@"registerUserNotificationSettings:")]) {
+                id settings = [self createUserNotificationSettings:self.notificationTypes];
+
+                // Using delay to avoid perfrom selector warning.
+                [[UIApplication sharedApplication] performSelector:NSSelectorFromString(@"registerUserNotificationSettings:") withObject:settings afterDelay:0.0];
+                [[UIApplication sharedApplication] performSelector:NSSelectorFromString(@"registerForRemoteNotifications") withObject:nil afterDelay:0.0];
+            } else {
+                [[UIApplication sharedApplication] registerForRemoteNotificationTypes:self.notificationTypes];
+            }
         } else {
-            //note: we don't want to use the wrapper method here, because otherwise it will blow away the existing notificationTypes
-            [[UIApplication sharedApplication] registerForRemoteNotificationTypes:UIRemoteNotificationTypeNone];
+            if ([[UIApplication sharedApplication] respondsToSelector:NSSelectorFromString(@"registerUserNotificationSettings:")]) {
+
+                if ([UAPush currentUserNotificationTypes] != 0 && self.allowUnregisteringUserNotificationTypes) {
+                    id settings = [self createUserNotificationSettings:UIRemoteNotificationTypeNone];
+                    // Using delay to avoid perfrom selector warning.
+                    [[UIApplication sharedApplication] performSelector:NSSelectorFromString(@"registerUserNotificationSettings:") withObject:settings afterDelay:0.0];
+                }
+            } else {
+                [[UIApplication sharedApplication] registerForRemoteNotificationTypes:UIRemoteNotificationTypeNone];
+            }
             [self updateRegistration];
         }
     }
@@ -302,7 +363,15 @@ static Class _uiClass;
 
 - (void)registerForRemoteNotifications {
     if (self.pushEnabled && self.notificationTypes != UIRemoteNotificationTypeNone) {
-        [[UIApplication sharedApplication] registerForRemoteNotificationTypes:self.notificationTypes];
+        if ([[UIApplication sharedApplication] respondsToSelector:NSSelectorFromString(@"registerUserNotificationSettings:")]) {
+            id settings = [self createUserNotificationSettings:self.notificationTypes];
+
+            // Using delay to avoid perfrom selector warning. Both are void methods.
+            [[UIApplication sharedApplication] performSelector:NSSelectorFromString(@"registerUserNotificationSettings:") withObject:settings afterDelay:0.0];
+            [[UIApplication sharedApplication] performSelector:NSSelectorFromString(@"registerForRemoteNotifications") withObject:settings afterDelay:0.0];
+        } else {
+            [[UIApplication sharedApplication] registerForRemoteNotificationTypes:self.notificationTypes];
+        }
     }
 }
 
@@ -560,7 +629,7 @@ BOOL deferChannelCreationOnForeground = false;
     payload.pushAddress = self.deviceToken;
 
     if (self.pushEnabled && self.deviceToken) {
-        payload.optedIn = [UIApplication sharedApplication].enabledRemoteNotificationTypes != UIRemoteNotificationTypeNone;
+        payload.optedIn = [UAPush currentEnabledNotificationTypes] != UIRemoteNotificationTypeNone;
     } else {
         payload.optedIn = NO;
     }
@@ -693,19 +762,7 @@ BOOL deferChannelCreationOnForeground = false;
 #pragma mark NSUserDefaults
 
 + (void)registerNSUserDefaults {
-    // Migration for pre 1.3.0 library quiet time settings
-    // This pulls an object, instead of a BOOL
-    id quietTimeEnabled = [[NSUserDefaults standardUserDefaults] valueForKey:UAPushQuietTimeEnabledSettingsKey];
-    NSDictionary *currentQuietTime = [[NSUserDefaults standardUserDefaults] valueForKey:UAPushQuietTimeSettingsKey];
-
-    if (!quietTimeEnabled && currentQuietTime) {
-        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:UAPushQuietTimeEnabledSettingsKey];
-    } else {
-        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:UAPushQuietTimeEnabledSettingsKey];
-    }
-
     NSDictionary *defaults = @{ UAPushEnabledSettingsKey: [NSNumber numberWithBool:YES] };
-
     [[NSUserDefaults standardUserDefaults] registerDefaults:defaults];
 }
 
@@ -713,6 +770,8 @@ BOOL deferChannelCreationOnForeground = false;
     if (self.registrationBackgroundTask == UIBackgroundTaskInvalid) {
         self.registrationBackgroundTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
             [self.deviceRegistrar cancelAllRequests];
+            [[UIApplication sharedApplication] endBackgroundTask:self.registrationBackgroundTask];
+            self.registrationBackgroundTask = UIBackgroundTaskInvalid;
         }];
     }
 
@@ -726,5 +785,40 @@ BOOL deferChannelCreationOnForeground = false;
     }
 }
 
+// UIUserNotificationSettings is not available on iOS7, so we have to
+// construct it using a selector from a string. Calling performSelector with
+// a string might leak, so we cast the func so arc knows the details about the
+// method.
+// http://stackoverflow.com/questions/7017281/performselector-may-cause-a-leak-because-its-selector-is-unknown
+- (id)createUserNotificationSettings:(NSUInteger)types {
+    Class class = NSClassFromString(@"UIUserNotificationSettings");
+    SEL selector = NSSelectorFromString(@"settingsForTypes:categories:");
+    IMP imp = [class methodForSelector:selector];
+    NSObject *(*func)(id, SEL, NSUInteger, NSSet *) = (void *)imp;
+    return func(class, selector, types, nil);
+}
+
++ (NSUInteger)currentEnabledNotificationTypes {
+    if (![UAPush shared].pushEnabled) {
+        return UIRemoteNotificationTypeNone;
+    }
+
+    if ([[UIApplication sharedApplication] respondsToSelector:NSSelectorFromString(@"currentUserNotificationSettings")]) {
+        return [self currentUserNotificationTypes];
+    } else {
+        return [[UIApplication sharedApplication] enabledRemoteNotificationTypes];
+    }
+}
+
+// Gets the user notification types for iOS8
++ (NSUInteger)currentUserNotificationTypes {
+    NSUInteger types = 0;
+    if ([[UIApplication sharedApplication] respondsToSelector:NSSelectorFromString(@"currentUserNotificationSettings")]) {
+        NSValue *value = [[UIApplication sharedApplication] valueForKeyPath:@"currentUserNotificationSettings.types"];
+        [value getValue:&types];
+    }
+
+    return types;
+}
 
 @end

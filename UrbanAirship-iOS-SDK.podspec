@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name         = 'UrbanAirship-iOS-SDK'
-  s.version      = '4.0.0'
+  s.version      = '4.0.4'
   s.license      = 'BSD'
   s.platform     = :ios
 

@@ -181,21 +181,21 @@ typedef void (^UAAnalyticsUploadCompletionBlock)(void);
     
     // check enabled notification types
     NSMutableArray *notification_types = [NSMutableArray array];
-    UIRemoteNotificationType enabledRemoteNotificationTypes = [[UIApplication sharedApplication] enabledRemoteNotificationTypes];
-    
-    if ((UIRemoteNotificationTypeBadge & enabledRemoteNotificationTypes) > 0) {
+
+    NSUInteger types = [UAPush currentEnabledNotificationTypes];
+    if ((UIRemoteNotificationTypeBadge & types) > 0) {
         [notification_types addObject:@"badge"];
     }
     
-    if ((UIRemoteNotificationTypeSound & enabledRemoteNotificationTypes) > 0) {
+    if ((UIRemoteNotificationTypeSound & types) > 0) {
         [notification_types addObject:@"sound"];
     }
     
-    if ((UIRemoteNotificationTypeAlert & enabledRemoteNotificationTypes) > 0) {
+    if ((UIRemoteNotificationTypeAlert & types) > 0) {
         [notification_types addObject:@"alert"];
     }
 
-    if ((UIRemoteNotificationTypeNewsstandContentAvailability & enabledRemoteNotificationTypes) > 0) {
+    if ((UIRemoteNotificationTypeNewsstandContentAvailability & types) > 0) {
         [notification_types addObject:@"newsstand"];
     }
     
@@ -454,9 +454,9 @@ typedef void (^UAAnalyticsUploadCompletionBlock)(void);
     [request addRequestHeader:@"X-UA-OS-Version" value:[[UIDevice currentDevice] systemVersion]];
     [request addRequestHeader:@"Content-Type" value: @"application/json"];
     [request addRequestHeader:@"X-UA-Timezone" value:[[NSTimeZone defaultTimeZone] name]];
-    [request addRequestHeader:@"X-UA-Locale-Language" value:[[NSLocale currentLocale] objectForKey:NSLocaleLanguageCode]];
-    [request addRequestHeader:@"X-UA-Locale-Country" value:[[NSLocale currentLocale] objectForKey: NSLocaleCountryCode]];
-    [request addRequestHeader:@"X-UA-Locale-Variant" value:[[NSLocale currentLocale] objectForKey: NSLocaleVariantCode]];
+    [request addRequestHeader:@"X-UA-Locale-Language" value:[[NSLocale autoupdatingCurrentLocale] objectForKey:NSLocaleLanguageCode]];
+    [request addRequestHeader:@"X-UA-Locale-Country" value:[[NSLocale autoupdatingCurrentLocale] objectForKey: NSLocaleCountryCode]];
+    [request addRequestHeader:@"X-UA-Locale-Variant" value:[[NSLocale autoupdatingCurrentLocale] objectForKey: NSLocaleVariantCode]];
     [request addRequestHeader:@"X-UA-Push-Address" value:[UAPush shared].deviceToken];
     [request addRequestHeader:@"X-UA-Channel-ID" value:[UAPush shared].channelID];
 
