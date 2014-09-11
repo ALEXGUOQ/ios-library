@@ -427,6 +427,16 @@ SINGLETON_IMPLEMENTATION(UAInboxDBManager)
     } completion:completion];
 }
 
+- (void)deleteOldDatabaseIfExists {
+    NSArray *libraryDirectories = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
+    NSString *libraryDirectory = [libraryDirectories objectAtIndex:0];
+    NSString *dbPath = [libraryDirectory stringByAppendingPathComponent:OLD_DB_NAME];
+    
+    if ([[NSFileManager defaultManager] fileExistsAtPath:dbPath]) {
+        [[NSFileManager defaultManager] removeItemAtPath:dbPath error:nil];
+    }
+}
+
 #pragma mark - Get Messages
 
 -(UAInboxMessage *)getMessageWithID:(NSString *)messageID context:(NSManagedObjectContext *)context {
@@ -484,16 +494,6 @@ SINGLETON_IMPLEMENTATION(UAInboxDBManager)
     }
 
     return directoryURL;
-}
-
-- (void)deleteOldDatabaseIfExists {
-  NSArray *libraryDirectories = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
-  NSString *libraryDirectory = [libraryDirectories objectAtIndex:0];
-  NSString *dbPath = [libraryDirectory stringByAppendingPathComponent:OLD_DB_NAME];
-  
-  if ([[NSFileManager defaultManager] fileExistsAtPath:dbPath]) {
-    [[NSFileManager defaultManager] removeItemAtPath:dbPath error:nil];
-  }
 }
 
 - (void)dealloc {

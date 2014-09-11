@@ -105,7 +105,6 @@ SINGLETON_INTERFACE(UAInboxDBManager);
 /**
  * Saves any changes to the database
  */
-- (void)saveContext;
 - (void)performBackgroundActionAndSave:(void(^)(NSManagedObjectContext *context))action
                             completion:(void(^)(NSError *saveError))completion;
 

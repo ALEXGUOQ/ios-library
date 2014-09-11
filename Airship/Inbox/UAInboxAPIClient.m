@@ -9,8 +9,6 @@
 #import "UAUser.h"
 #import "UAUtils.h"
 #import "NSJSONSerialization+UAAdditions.h"
-#import "UAInboxDBManager+Internal.h"
-#import <CoreData/NSManagedObjectContext.h>
 
 @interface UAInboxAPIClient()
 
@@ -154,9 +152,8 @@ NSString *const UALastMessageListModifiedTime = @"UALastMessageListModifiedTime.
      } retryWhere:^(UAHTTPRequest *request){
          return NO;
      } onSuccess:^(UAHTTPRequest *request, NSUInteger lastDelay){
-         UAInboxDBManager *inboxDBManager = [UAInboxDBManager shared];
+         NSArray *messages;
          NSInteger unread = 0;
-         NSArray *messages = nil;
          NSInteger statusCode = request.response.statusCode;
          
          if (statusCode == 200) {

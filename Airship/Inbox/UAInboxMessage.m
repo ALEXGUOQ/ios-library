@@ -79,7 +79,6 @@
          if (self.unread) {
              strongInbox.unreadCount = strongInbox.unreadCount - 1;
              self.unread = NO;
-             [[UAInboxDBManager shared] saveContext];
          }
 
          strongInbox.isBatchUpdating = NO;
