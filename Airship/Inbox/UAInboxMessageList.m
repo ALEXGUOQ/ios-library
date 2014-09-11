@@ -141,42 +141,52 @@ NSString * const UAInboxMessageListUpdatedNotification = @"com.urbanairship.noti
   }];
 [self loadSavedMessagesWithCompletion:^(NSArray *messages) {
     [self.client retrieveMessageListOnSuccess:^(NSInteger status, NSArray *messages, NSInteger unread) {
+        
+        void (^saveCompletion)(NSError *saveError) = ^(NSError *saveError){
+            self.isRetrieving = NO;
+            
+            UA_LDEBUG(@"Retrieve message list succeeded with messages: %@", self.messages);
+            if (successBlock && !isCallbackCancelled) {
+                successBlock();
+            }
+            
+            [self notifyObservers:@selector(messageListLoaded)];
+            [self sendMessageListUpdatedNotification];
+        };
 
         if (status == 200) {
             UA_LDEBUG(@"Refreshing message list.");
 
             UAInboxDBManager *inboxDBManager = [UAInboxDBManager shared];
-            NSMutableSet *responseMessageIDs = [NSMutableSet set];
-
-            // Convert dictionary to objects for convenience
-            for (NSDictionary *message in messages) {
-                if (![inboxDBManager updateMessageWithDictionary:message]) {
-                   [inboxDBManager addMessageFromDictionary:message];
+            
+            [inboxDBManager performBackgroundActionAndSave:^(NSManagedObjectContext *context) {
+                NSMutableSet *responseMessageIDs = [NSMutableSet set];
+                
+                // Convert dictionary to objects for convenience
+                for (NSDictionary *message in messages) {
+                    if (![inboxDBManager updateMessageWithDictionary:message context:context]) {
+                        [inboxDBManager addMessageFromDictionary:message
+                                                         context:context];
+                    }
+                    
+                    NSString *messageID = [message valueForKey:@"message_id"];
+                    if (messageID) {
+                        [responseMessageIDs addObject:messageID];
+                    }
                 }
-
-                NSString *messageID = [message valueForKey:@"message_id"];
-                if (messageID) {
-                    [responseMessageIDs addObject:messageID];
-                }
-            }
-
-            // Delete server side deleted messages
-            NSMutableSet *messagesToDelete = [[inboxDBManager messageIDs] mutableCopy];
-            [messagesToDelete minusSet:responseMessageIDs];
-            [inboxDBManager deleteMessagesWithIDs:messagesToDelete];
-
-            [self loadSavedMessages];
+                
+                // Delete server side deleted messages
+                NSMutableSet *messagesToDelete = [[inboxDBManager messageIDsInContext:context] mutableCopy];
+                [messagesToDelete minusSet:responseMessageIDs];
+                [inboxDBManager deleteMessagesWithIDs:messagesToDelete context:context];
+            } completion:^(NSError *saveError){
+                [self loadSavedMessages];
+                
+                saveCompletion(saveError);
+            }];
+        } else {
+            saveCompletion(nil);
         }
-
-        self.isRetrieving = NO;
-        
-        UA_LDEBUG(@"Retrieve message list succeeded with messages: %@", self.messages);
-        if (successBlock && !isCallbackCancelled) {
-          successBlock();
-        }
-
-        [self notifyObservers:@selector(messageListLoaded)];
-        [self sendMessageListUpdatedNotification];
       } onFailure:^(UAHTTPRequest *request){
         self.isRetrieving = NO;
         
