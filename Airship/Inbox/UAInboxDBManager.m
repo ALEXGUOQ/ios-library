@@ -190,8 +190,8 @@ SINGLETON_IMPLEMENTATION(UAInboxDBManager)
 }
 
 - (void)markMessagesRead:(NSArray *)messages {
-    for (UAInboxMessage *message in messages) {
-        if ([message isKindOfClass:[UAInboxMessage class]]) {
+    for (UAInboxMessageData *message in messages) {
+        if ([message isKindOfClass:[UAInboxMessageData class]]) {
             message.unread = NO;
         }
     }

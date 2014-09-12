@@ -79,6 +79,8 @@ SINGLETON_INTERFACE(UAInboxDBManager);
  * Deletes a list of messages from the database
  * @param messages NSArray of UAInboxMessages to be deleted 
  */
+- (void)deleteMessages:(NSArray *)messages
+               context:(NSManagedObjectContext *)context;
 - (void)deleteMessages:(NSArray *)messages;
 
 
@@ -92,7 +94,8 @@ SINGLETON_INTERFACE(UAInboxDBManager);
  * Deletes a set of messages from the database
  * @param messageIDs NSArray of the messages IDs to be deleted
  */
-- (void)deleteMessagesWithIDs:(NSSet *)messageIDs context:(NSManagedObjectContext *)context;
+- (void)deleteMessagesWithIDs:(NSSet *)messageIDs
+                      context:(NSManagedObjectContext *)context;
 - (void)deleteMessagesWithIDs:(NSSet *)messageIDs;
 
 /**
