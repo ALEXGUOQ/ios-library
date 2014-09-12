@@ -49,7 +49,11 @@
 
 // NSObject override
 - (NSString *)description {
-    return [NSString stringWithFormat: @"%@ - %@ - %@ - %@",self.messageID, self.messageSent, self.messageID, self.title];
+    return [NSString stringWithFormat: @"<%@: %p, %@: \"%@\", %@: %@, %@: \"%@\">",
+            NSStringFromClass(self.class), self,
+            NSStringFromSelector(@selector(messageID)), self.messageID,
+            NSStringFromSelector(@selector(messageSent)), self.messageSent,
+            NSStringFromSelector(@selector(title)), self.title];
 }
 
 #pragma mark -
