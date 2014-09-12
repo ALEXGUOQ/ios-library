@@ -94,6 +94,9 @@ NSString * const UAInboxMessageListUpdatedNotification = @"com.urbanairship.noti
         [inboxDBManager deleteExpiredMessagesInContext:context];
     } completion:^(NSError *saveError) {
         [inboxDBManager getMessagesWithCompletion:^(NSArray *messages){
+            
+            [self setUnreadCountForMessages:messages];
+            
             self.messages = [messages mutableCopy];
             
             UA_LDEBUG(@"Loaded saved messages: %@.", self.messages);
@@ -105,17 +108,21 @@ NSString * const UAInboxMessageListUpdatedNotification = @"com.urbanairship.noti
     }];
 }
 
-- (void)loadSavedMessages {
-    [[UAInboxDBManager shared] deleteExpiredMessages];
-    NSMutableArray *savedMessages = [[[UAInboxDBManager shared] getMessages] mutableCopy];
+- (void)setUnreadCountForMessages:(NSArray *)messages {
     self.unreadCount = 0;
     
-    for (UAInboxMessage *msg in savedMessages) {
+    for (UAInboxMessage *msg in messages) {
         msg.inbox = self;
         if (msg.unread) {
             self.unreadCount ++;
         }
     }
+}
+
+- (void)loadSavedMessages {
+    [[UAInboxDBManager shared] deleteExpiredMessages];
+    NSMutableArray *savedMessages = [[[UAInboxDBManager shared] getMessages] mutableCopy];
+    [self setUnreadCountForMessages:savedMessages];
     
     self.messages = savedMessages;
     UA_LDEBUG(@"Loaded saved messages: %@.", self.messages);
@@ -180,9 +187,9 @@ NSString * const UAInboxMessageListUpdatedNotification = @"com.urbanairship.noti
                 [messagesToDelete minusSet:responseMessageIDs];
                 [inboxDBManager deleteMessagesWithIDs:messagesToDelete context:context];
             } completion:^(NSError *saveError){
-                [self loadSavedMessages];
-                
-                saveCompletion(saveError);
+                [self loadSavedMessagesWithCompletion:^(NSArray *messages) {
+                    saveCompletion(saveError);
+                }];
             }];
         } else {
             saveCompletion(nil);

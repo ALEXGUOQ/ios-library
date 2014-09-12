@@ -77,7 +77,7 @@ SINGLETON_IMPLEMENTATION(UAInboxDBManager)
           }
           
           if (mainThreadObject) {
-            [mainThreadMessages addObject:mainThreadObject];
+            [mainThreadMessages addObject:[UAInboxMessage messageWithData:mainThreadObject]];
           }
         }
         completion(mainThreadMessages);
