@@ -47,7 +47,7 @@ NSString *const UALastMessageListModifiedTime = @"UALastMessageListModifiedTime.
     NSURL *requestUrl = [NSURL URLWithString: urlString];
 
     UAHTTPRequest *request = [UAUtils UAHTTPUserRequestWithURL:requestUrl method:@"GET"];
-    
+
     NSString *lastModified = [[NSUserDefaults standardUserDefaults] stringForKey:[NSString stringWithFormat:UALastMessageListModifiedTime, userName]];
     if (lastModified) {
         [request addRequestHeader:@"If-Modified-Since" value:lastModified];
@@ -141,54 +141,54 @@ NSString *const UALastMessageListModifiedTime = @"UALastMessageListModifiedTime.
 
 - (void)retrieveMessageListOnSuccess:(UAInboxClientMessageRetrievalSuccessBlock)successBlock
                            onFailure:(UAInboxClientFailureBlock)failureBlock {
-    
+
     NSString *userName = [UAUser defaultUser].username;
     UAHTTPRequest *retrieveRequest = [self requestToRetrieveMessageListForUser:userName];
     
     [self.requestEngine
-     runRequest:retrieveRequest
-     succeedWhere:^(UAHTTPRequest *request){
-         return (BOOL)(request.response.statusCode == 200 || request.response.statusCode == 304);
-     } retryWhere:^(UAHTTPRequest *request){
-         return NO;
-     } onSuccess:^(UAHTTPRequest *request, NSUInteger lastDelay){
-         NSArray *messages;
-         NSInteger unread = 0;
-         NSInteger statusCode = request.response.statusCode;
-         
-         if (statusCode == 200) {
-             NSDictionary *headers = request.response.allHeaderFields;
-             NSString *lastModified = [headers objectForKey:@"Last-Modified"];
-             
-             UA_LDEBUG(@"Setting Last-Modified time to '%@' for user %@'s message list.", lastModified, userName);
-             [[NSUserDefaults standardUserDefaults] setValue:lastModified
-                                                      forKey:[NSString stringWithFormat:UALastMessageListModifiedTime, userName]];
-             
-             NSString *responseString = request.responseString;
-             UA_LTRACE(@"Retrieved message list response: %@", responseString);
-             
-             NSDictionary *jsonResponse = [NSJSONSerialization objectWithString:responseString];
-             messages = [jsonResponse objectForKey:@"messages"];
-             
-             unread = [[jsonResponse objectForKey: @"badge"] integerValue];
-             if (unread < 0) {
-                 unread = 0;
-             }
-         }
-         
-         
-         if (successBlock) {
+      runRequest:retrieveRequest
+      succeedWhere:^(UAHTTPRequest *request){
+          return (BOOL)(request.response.statusCode == 200 || request.response.statusCode == 304);
+      } retryWhere:^(UAHTTPRequest *request){
+          return NO;
+      } onSuccess:^(UAHTTPRequest *request, NSUInteger lastDelay){
+          NSArray *messages;
+          NSInteger unread = 0;
+          NSInteger statusCode = request.response.statusCode;
+
+          if (statusCode == 200) {
+              NSDictionary *headers = request.response.allHeaderFields;
+              NSString *lastModified = [headers objectForKey:@"Last-Modified"];
+
+              UA_LDEBUG(@"Setting Last-Modified time to '%@' for user %@'s message list.", lastModified, userName);
+              [[NSUserDefaults standardUserDefaults] setValue:lastModified
+                                                       forKey:[NSString stringWithFormat:UALastMessageListModifiedTime, userName]];
+
+              NSString *responseString = request.responseString;
+              UA_LTRACE(@"Retrieved message list response: %@", responseString);
+
+              NSDictionary *jsonResponse = [NSJSONSerialization objectWithString:responseString];
+              messages = [jsonResponse objectForKey:@"messages"];
+
+              unread = [[jsonResponse objectForKey: @"badge"] integerValue];
+              if (unread < 0) {
+                  unread = 0;
+              }
+          }
+
+
+          if (successBlock) {
              successBlock(statusCode, messages, unread);
-         } else {
-             UA_LERR(@"missing successBlock");
-         }
-     } onFailure:^(UAHTTPRequest *request, NSUInteger lastDelay){
-         if (failureBlock) {
-             failureBlock(request);
-         } else {
-             UA_LERR(@"missing failureBlock");
-         }
-     }];
+          } else {
+              UA_LERR(@"missing successBlock");
+          }
+      } onFailure:^(UAHTTPRequest *request, NSUInteger lastDelay){
+          if (failureBlock) {
+              failureBlock(request);
+          } else {
+              UA_LERR(@"missing failureBlock");
+          }
+      }];
 }
 
 - (void)performBatchDeleteForMessages:(NSArray *)messages
